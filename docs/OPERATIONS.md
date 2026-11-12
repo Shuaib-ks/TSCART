@@ -6,17 +6,21 @@ Admin → Products → Add product. Enter a name, URL slug, category, rupee pric
 
 Uploaded JPEG, PNG and WebP files are limited to 5 MB each and saved under `data/uploads/`. Use up to eight images. HTTPS image URLs are also supported; local uploads avoid reliance on another image host. SVG uploads are intentionally rejected. Archive hides a product without damaging historical orders. Edit the archived product and check Published to restore it.
 
+To permanently remove a product, choose **Delete** in the product list or **Delete product** in its editor, then confirm. It disappears from both the storefront and admin catalogue. This cannot be undone in the panel; use Archive if you may want to restore it later. Existing orders keep their item names, quantities, prices and images, and still need fulfilment. Deletion does not cancel or refund an order. Uploaded images are retained for historical receipts and other products that may share them.
+
+New checkouts cannot buy deleted items. Cancelling an existing order restores stock only for products that still exist; it does not recreate a deleted product. A stale editor tab cannot recreate a deleted product by saving it. You can add a new product with the same name and URL slug; it receives a new identity.
+
 Available stock excludes quantities reserved by existing orders. If checkout changes stock while an admin edits a product, saving is rejected until the product is reloaded. When updating stock from a supplier, account for outstanding reserved units; the app does not synchronise inventory with your supplier.
 
 ## COD order flow
 
-1. Checkout saves a confirmed order, reserves stock and queues the WhatsApp alert.
+1. Checkout saves a confirmed order, reserves stock and makes its details available in Admin → Orders.
 2. Check the admin order, verify serviceability and arrange supplier fulfilment.
 3. Move Confirmed → Processing → Shipped. Add courier name and tracking reference.
 4. Move Shipped → Delivered after delivery.
 5. Check “COD money has been collected” only after receiving/confirming the collection. Delivery alone does not mark the money collected.
 
-The admin is the source of truth. A delayed or duplicated WhatsApp notification must not create a second supplier order. Always deduplicate using the TSCART order reference.
+The admin is the source of truth. Use the TSCART order reference to fulfil each order once.
 
 ## Online orders and reservations
 
@@ -32,11 +36,11 @@ Refunds are performed in the Razorpay dashboard. This release does not implement
 
 Customers receive an on-screen order reference and private confirmation link. They can copy that link to revisit the status. Its token is stored in browser session storage, not exposed in the normal page URL. The copied link contains the token in the URL fragment and should be kept private. The app does not send customer email/SMS confirmations; an email field is optional contact information only.
 
-## WhatsApp queue
+## View customer and order details
 
-Jobs are created in the same database transaction as COD confirmation or captured payment. Processing occurs every 15 seconds while the server is running. Failures do not remove orders. Status `sent` means Meta accepted the message; delivery receipts are not integrated. Timeouts or a restart during an uncertain send can produce duplicate alerts, so fulfil each order reference only once.
+Open **Admin → Orders → View** to see the customer's name, phone, optional email, full delivery address, delivery notes, item names, quantities, prices, shipping, total, payment method/status and tracking details. Orders are saved at checkout and remain available after restarting the server. Reload the Orders page to see the latest orders.
 
-After correcting API configuration or template approval, use Retry notification for a failed/pending setup job. The app will not resend one already marked sent. A cancelled order suppresses pending alerts; an already-sent WhatsApp message is not recalled.
+Online orders also appear before payment is completed, marked Awaiting payment. Fulfil only confirmed orders; use payment reconciliation if a payment needs review. Order records and all existing product/payment settings are preserved when updating the app; keep `data/` and `.env`.
 
 ## Export and retention
 

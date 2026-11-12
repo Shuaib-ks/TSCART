@@ -28,12 +28,12 @@ RAZORPAY_WEBHOOK_SECRET=CHOOSE_A_DIFFERENT_LONG_RANDOM_SECRET
 REQUIRE_LIVE_KEYS=false
 ```
 
-`STORE_MODE=live` activates the payment code. With test keys, only simulated transactions occur. Use a separate staging data directory and WhatsApp test configuration or leave WhatsApp unconfigured.
+`STORE_MODE=live` activates the payment code. With test keys, only simulated transactions occur. Use a separate staging data directory.
 
 3. Create a webhook in the same Test Mode. URL: `https://YOUR-DOMAIN/api/webhooks/razorpay`. Use exactly the same webhook secret as the environment. Subscribe to **payment.captured** and **order.paid**. The endpoint also safely ignores unrelated events.
 4. Enable automatic capture for order payments in the merchant dashboard. An authorised payment is not treated as paid by this app.
 5. Restart the server. Admin → Settings should show Razorpay as configured. This checks presence, not credential validity.
-6. Test successful, failed and dismissed checkouts. Verify that the order is confirmed only after capture. Repeat/replay a webhook to verify it does not duplicate an order or a queued alert. Close the browser after payment and confirm the webhook still updates the order.
+6. Test successful, failed and dismissed checkouts. Verify that the order is confirmed only after capture. Repeat/replay a webhook to verify it does not duplicate an order or stock reservation. Close the browser after payment and confirm the webhook still updates the order.
 7. For production, complete account activation, generate **live** keys, create the **live-mode** webhook, replace the secrets, and set `REQUIRE_LIVE_KEYS=true`. Restart and perform an owner-authorised small real payment and refund.
 
 ## How this implementation works

@@ -13,7 +13,6 @@ export class Store {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS products(id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, data TEXT NOT NULL, stock INTEGER NOT NULL CHECK(stock>=0), active INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY, idem TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL, data TEXT NOT NULL, status TEXT NOT NULL, payment_status TEXT NOT NULL, gateway_id TEXT UNIQUE, payment_id TEXT UNIQUE, gateway_state TEXT DEFAULT 'idle', reserved INTEGER DEFAULT 1, created INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS outbox(order_id TEXT PRIMARY KEY REFERENCES orders(id), state TEXT DEFAULT 'queued', attempts INTEGER DEFAULT 0, next_at INTEGER DEFAULT 0, message_id TEXT, error TEXT);
       CREATE TABLE IF NOT EXISTS admin(id INTEGER PRIMARY KEY CHECK(id=1), email TEXT NOT NULL, password TEXT NOT NULL, must_change INTEGER DEFAULT 1);
       CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
@@ -29,7 +28,6 @@ export class Store {
       this.db.prepare('INSERT INTO settings VALUES(1,?)').run(JSON.stringify(initialSettings));
       for(const p of seedProducts) this.saveProduct({...p,images:[p.image],active:true});
     }
-    this.db.prepare("UPDATE outbox SET state='queued' WHERE state='sending'").run();
   }
   tx(fn) { this.db.exec('BEGIN IMMEDIATE'); try { const result=fn(); this.db.exec('COMMIT'); return result; } catch(e) {this.db.exec('ROLLBACK'); throw e;} }
   audit(action,entity='') {this.db.prepare('INSERT INTO audit(action,entity,created) VALUES(?,?,?)').run(action,entity,Date.now());}
@@ -51,6 +49,14 @@ export class Store {
     this.db.prepare('INSERT INTO products VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug,data=excluded.data,stock=excluded.stock,active=excluded.active').run(id,p.slug,JSON.stringify(p),stock,input.active===false?0:1);
     this.audit('product_saved',id);return this.product(id);
   }
+  deleteProduct(id) {
+    return this.tx(()=>{
+      const result=this.db.prepare('DELETE FROM products WHERE id=?').run(id);
+      insist(result.changes===1,'Product not found. It may already have been deleted.',404);
+      // Orders contain their own item snapshots. Keep images used by those receipts.
+      this.audit('product_deleted',id);
+    });
+  }
   updateSettings(input) {
     const s={...this.settings()};
     for(const [key,max] of Object.entries({tagline:150,announcement:180,supportEmail:150,supportPhone:25,businessName:120,businessAddress:500,deliveryText:2000,returnsText:3000})) if(input[key]!==undefined) s[key]=str(input[key],key,0,max);
@@ -61,7 +67,7 @@ export class Store {
   token(id) {return hmac(this.secret,id);}
   authorizeOrder(id,token) {insist(equalHex(this.token(id),token),'Order link is invalid or expired.',403);}
   order(id) {const r=this.db.prepare('SELECT * FROM orders WHERE id=?').get(id);if(!r)return null;return {...JSON.parse(r.data),status:r.status,paymentStatus:r.payment_status,gatewayId:r.gateway_id,paymentId:r.payment_id,gatewayState:r.gateway_state,reserved:!!r.reserved};}
-  orders() {return this.db.prepare('SELECT id FROM orders ORDER BY created DESC LIMIT 500').all().map(r=>({...this.order(r.id),notification:this.db.prepare('SELECT state,attempts,error,message_id FROM outbox WHERE order_id=?').get(r.id)||null}));}
+  orders() {return this.db.prepare('SELECT id FROM orders ORDER BY created DESC LIMIT 500').all().map(r=>this.order(r.id));}
   createOrder(input,idem) {
     insist(typeof idem==='string' && /^[a-zA-Z0-9_-]{20,100}$/.test(idem),'A checkout request ID is required.');
     insist(input.consent===true,'Please accept the checkout privacy notice.');
@@ -85,14 +91,12 @@ export class Store {
       const items=[];
       for(const [id,quantity] of quantities){const p=this.product(id);insist(p&&p.active,'An item is no longer available.',409);insist(p.stock>=quantity,`Only ${p.stock} of ${p.name} remain.`,409);items.push({id,name:p.name,quantity,price:p.price,image:p.image});}
       const subtotal=items.reduce((s,p)=>s+p.price*p.quantity,0);const settings=this.settings();const shipping=subtotal>=settings.freeShippingAt?0:settings.shippingFee;
-      const order={id:'TS-'+randomUUID().replaceAll('-','').slice(0,12).toUpperCase(),customer,items,subtotal,shipping,total:subtotal+shipping,paymentMethod:input.paymentMethod,created:Date.now(),demo:this.env.STORE_MODE!=='live',consentVersion:'2026-11-12',consentAt:new Date().toISOString(),tracking:''};
+      const order={id:'TS-'+randomUUID().replaceAll('-','').slice(0,12).toUpperCase(),customer,items,subtotal,shipping,total:subtotal+shipping,paymentMethod:input.paymentMethod,created:Date.now(),demo:this.env.STORE_MODE!=='live',consentVersion:'2026-11-12-admin-orders',consentAt:new Date().toISOString(),tracking:''};
       for(const item of items) {const changed=this.db.prepare('UPDATE products SET stock=stock-? WHERE id=? AND stock>=?').run(item.quantity,item.id,item.quantity);insist(changed.changes===1,'Stock changed. Please try again.',409);}
       this.db.prepare('INSERT INTO orders(id,idem,fingerprint,data,status,payment_status,created) VALUES(?,?,?,?,?,?,?)').run(order.id,idem,fingerprint,JSON.stringify(order),input.paymentMethod==='cod'?'confirmed':'awaiting_payment',input.paymentMethod==='cod'?'cod_due':'pending',order.created);
-      if(input.paymentMethod==='cod')this.enqueue(order.id);
       this.audit('order_created',order.id);return this.order(order.id);
     });
   }
-  enqueue(id) {this.db.prepare('INSERT OR IGNORE INTO outbox(order_id) VALUES(?)').run(id);}
   attachGateway(id,gateway) {
     const o=this.order(id);insist(o&&gateway.receipt===id&&gateway.amount===o.total&&gateway.currency==='INR','Razorpay order does not match this order.',409);
     insist(!o.gatewayId||o.gatewayId===gateway.id,'A payment order is already attached.',409);
@@ -104,7 +108,7 @@ export class Store {
       if(o.paymentStatus==='paid')return o;
       const late=!o.reserved||o.status==='cancelled';
       this.db.prepare('UPDATE orders SET payment_id=?,payment_status=?,status=? WHERE id=?').run(payment.id,'paid',late?'needs_review':'confirmed',id);
-      if(!late)this.enqueue(id);this.audit(late?'late_payment_review':'payment_confirmed',id);return this.order(id);
+      this.audit(late?'late_payment_review':'payment_confirmed',id);return this.order(id);
     });
   }
   updateOrder(id,input) {
@@ -117,7 +121,6 @@ export class Store {
         insist(o.paymentMethod==='cod'||input.gatewayChecked===true,'Check Razorpay for captured/authorised payments first and confirm the review.',409);
         if(o.reserved){for(const item of o.items)this.db.prepare('UPDATE products SET stock=stock+? WHERE id=?').run(item.quantity,item.id);}
         this.db.prepare('UPDATE orders SET reserved=0 WHERE id=?').run(id);
-        this.db.prepare("UPDATE outbox SET state='cancelled' WHERE order_id=? AND state<>'sent'").run(id);
       }
       const data=JSON.parse(this.db.prepare('SELECT data FROM orders WHERE id=?').get(id).data);
       data.tracking=str(input.tracking??data.tracking??'','Tracking information',0,200);

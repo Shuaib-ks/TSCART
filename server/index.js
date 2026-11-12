@@ -86,8 +86,15 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
           store.db.prepare('UPDATE admin SET password=?,must_change=0 WHERE id=1').run(hashPassword(password));store.db.prepare('DELETE FROM sessions').run();res.setHeader('Set-Cookie',cookie('',0));store.audit('password_changed');return json({ok:true});
         }
         if(path==='/api/admin/products'&&method==='GET')return json({products:store.products(true)});
-        if(path==='/api/admin/products'&&method==='POST')return json({product:store.saveProduct(await body(req))},201);
+        if(path==='/api/admin/products'&&method==='POST'){
+          const input=await body(req);
+          if(input.id)insist(store.product(input.id),'Product not found. It may have been deleted. Reload the product list.',404);
+          return json({product:store.saveProduct(input)},201);
+        }
+        const deleteProductMatch=path.match(/^\/api\/admin\/products\/([a-zA-Z0-9_-]+)\/permanent$/);
+        if(deleteProductMatch&&method==='DELETE'){store.deleteProduct(deleteProductMatch[1]);return json({ok:true});}
         const productMatch=path.match(/^\/api\/admin\/products\/([a-zA-Z0-9_-]+)$/);
+        // Keep the existing archive route safe for older, already-open admin pages.
         if(productMatch&&method==='DELETE'){insist(store.product(productMatch[1]),'Product not found.',404);store.db.prepare('UPDATE products SET active=0 WHERE id=?').run(productMatch[1]);store.audit('product_archived',productMatch[1]);return json({ok:true});}
         if(path==='/api/admin/upload'&&method==='POST'){
           store.limit('upload:'+ip,100,3600000);const data=await body(req,5*1024*1024,true);
@@ -98,14 +105,9 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
           const filename=randomUUID()+'.'+(jpeg?'jpg':png?'png':'webp');await mkdir(uploadDir,{recursive:true});await writeFile(join(uploadDir,filename),data);return json({url:'/uploads/'+filename},201);
         }
         if(path==='/api/admin/orders'&&method==='GET')return json({orders:store.orders()});
-        const orderMatch=path.match(/^\/api\/admin\/orders\/(TS-[A-Z0-9]+)(?:\/(retry|reconcile))?$/);
+        const orderMatch=path.match(/^\/api\/admin\/orders\/(TS-[A-Z0-9]+)(?:\/(reconcile))?$/);
         if(orderMatch&&method==='POST'){
           const id=orderMatch[1];insist(store.order(id),'Order not found.',404);
-          if(orderMatch[2]==='retry'){
-            insist(!store.order(id).demo,'Demo orders do not send notifications.');
-            const n=store.db.prepare('SELECT state FROM outbox WHERE order_id=?').get(id);insist(n&&!['sent','sending','cancelled'].includes(n.state),'This notification cannot be retried.',409);
-            store.db.prepare("UPDATE outbox SET state='queued',attempts=0,next_at=0 WHERE order_id=?").run(id);return json({ok:true});
-          }
           if(orderMatch[2]==='reconcile')return json({order:await integrations.reconcile(id,(await body(req)).gatewayId)});
           return json({order:store.updateOrder(id,await body(req))});
         }
@@ -154,9 +156,8 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const flag=name=>{const i=process.argv.indexOf(name);return i>=0?process.argv[i+1]:undefined;};
   if(flag('--port'))process.env.PORT=flag('--port');
   if(flag('--host'))process.env.HOST=flag('--host');
-  const {server,store,integrations}=makeApp();
-  const timer=setInterval(()=>integrations.processOutbox().catch(()=>console.error('Notification queue could not run.')),15000);timer.unref();
+  const {server,store}=makeApp();
   server.listen(Number(process.env.PORT||3000),process.env.HOST||'0.0.0.0',()=>console.log(`TSCART is ready at http://localhost:${process.env.PORT||3000} · ${process.env.STORE_MODE==='live'?'live':'demo'} mode`));
-  const stop=()=>{clearInterval(timer);server.close(()=>{store.close();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();};
+  const stop=()=>{server.close(()=>{store.close();process.exit(0);});setTimeout(()=>process.exit(0),10000).unref();};
   process.on('SIGINT',stop);process.on('SIGTERM',stop);
 }

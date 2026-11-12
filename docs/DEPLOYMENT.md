@@ -1,8 +1,8 @@
 # Hosting TSCART
 
-The supplied application needs **one always-on Node.js 24 process, HTTPS and persistent disk**. It is a complete server application, not a folder of static HTML to upload to generic static hosting. SQLite, images, sessions and the notification queue are stored in `data/`.
+The supplied application needs **one always-on Node.js 24 process, HTTPS and persistent disk**. It is a complete server application, not a folder of static HTML to upload to generic static hosting. SQLite, images and sessions are stored in `data/`.
 
-Do not deploy this unchanged to ephemeral serverless hosting such as ordinary Vercel Functions. Multiple replicas or deleted ephemeral disks can lose state or cause duplicate queue processing. To scale horizontally, migrate SQLite to a shared database, uploads to object storage and the outbox to a worker queue.
+Do not deploy this unchanged to ephemeral serverless hosting such as ordinary Vercel Functions. Multiple replicas or deleted ephemeral disks can lose state. To scale horizontally, migrate SQLite to a shared database and uploads to object storage.
 
 ## Any compatible Node host
 
@@ -51,7 +51,6 @@ To restore: stop the app; move the current `data/` to a private recovery directo
 - Starter admin password replaced; public access over HTTPS.
 - Owner-only access to environment secrets, database and backups.
 - Live Razorpay keys/webhook/capture settings verified and `REQUIRE_LIVE_KEYS=true`.
-- Approved Meta template, valid token, recipient opt-in and actual received alert verified.
 - Real COD order procedure, courier serviceability, supplier fulfilment and refund process ready.
 - Restart persistence, backup restore and payment recovery checked.
 
