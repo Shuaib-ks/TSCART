@@ -1,0 +1,50 @@
+{
+  "hero.jpg": {
+    "url": "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0",
+    "role": "Living-room hero"
+  },
+  "living.jpg": {
+    "url": "https://images.unsplash.com/photo-1578500494198-246f612d3b3d",
+    "role": "Living-room category and story"
+  },
+  "kitchen.jpg": {
+    "url": "https://images.unsplash.com/photo-1604578762246-41134e37f9cc",
+    "role": "Kitchen and dining category"
+  },
+  "bath.jpg": {
+    "url": "https://images.unsplash.com/photo-1620626011761-996317b8d101",
+    "role": "Bathroom category"
+  },
+  "vase.jpg": {
+    "url": "https://images.unsplash.com/photo-1617076678835-82040043ce2f",
+    "page": "https://unsplash.com/photos/fHRzBCC3CzI",
+    "credit": "Priscilla Du Preez",
+    "role": "Illustrative ceramic vase"
+  },
+  "mug.jpg": {
+    "url": "https://images.unsplash.com/photo-1720752844573-efd69718ee46",
+    "role": "Illustrative mug"
+  },
+  "basket.jpg": {
+    "url": "https://images.unsplash.com/flagged/photo-1568051263459-4615cc08a864",
+    "page": "https://unsplash.com/photos/2rAK4CG8_8Y",
+    "credit": "Eugenia Pan’kiv",
+    "role": "Illustrative basket"
+  },
+  "board.jpg": {
+    "url": "https://images.unsplash.com/photo-1645743714191-bf033e0c181a",
+    "page": "https://unsplash.com/photos/ujPsObMXapE",
+    "credit": "Rumman Amin",
+    "role": "Illustrative wooden board"
+  },
+  "towel.jpg": {
+    "url": "https://images.unsplash.com/photo-1760722974657-f64bce2f9cc5",
+    "page": "https://unsplash.com/photos/qPNgpYUCW0c",
+    "credit": "Mads Leif Hansen",
+    "role": "Illustrative towels"
+  },
+  "lamp.jpg": {
+    "url": "https://images.unsplash.com/photo-1507473885765-e6ed057f782c",
+    "role": "Illustrative task lamp"
+  }
+}
