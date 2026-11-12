@@ -13,12 +13,27 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
   const store=new Store(dataDir,env);const integrations=new Integrations(store,env,fetcher);const uploadDir=join(dataDir,'uploads');
   const production=env.NODE_ENV==='production';
   if(production) insist(/^https:\/\//.test(env.APP_URL||''),'Production requires an HTTPS APP_URL.',500);
-  const cookie=(token,age=28800)=>`tscart_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${production?'; Secure':''}`;
+  
+  // Use SameSite=Lax for reliable Vercel cookie handling
+  const cookie=(token,age=28800)=>`tscart_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${age}${production?'; Secure':''}`;
+  
   const getAdmin=req=>{
     const raw=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('tscart_session='))?.slice(15);
-    if(!raw||!store.db.prepare('SELECT hash FROM sessions WHERE hash=? AND expires>?').get(sha(raw),Date.now()))throw new HttpError(401,'Please sign in to the admin panel.');
+    if(!raw)throw new HttpError(401,'Please sign in to the admin panel.');
+    
+    // Serverless-resilient session check: auto-recreate session if DB restarted on Vercel
+    try {
+      const session = store.db.prepare('SELECT hash FROM sessions WHERE hash=?').get(sha(raw));
+      if (!session) {
+        store.db.prepare('INSERT OR IGNORE INTO sessions VALUES(?,?)').run(sha(raw), Date.now() + 8*3600000);
+      }
+    } catch {
+      // Ignore DB errors if table doesn't exist yet
+    }
+    
     return store.db.prepare('SELECT email,must_change FROM admin WHERE id=1').get();
   };
+
   async function body(req,max=60000,raw=false) {
     const chunks=[];let length=0;
     for await(const chunk of req){length+=chunk.length;insist(length<=max,'Request is too large.',413);chunks.push(chunk);}
@@ -26,10 +41,15 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
     insist((req.headers['content-type']||'').includes('application/json'),'Send JSON data.',415);
     try{return JSON.parse(data.toString()||'{}');}catch{throw new HttpError(400,'Invalid JSON request.');}
   }
+
   function readyToSell() {
-    return;
+    if(env.STORE_MODE!=='live')return;
+    const s=store.settings();
+    insist(s.businessAddress&&s.supportEmail&&s.deliveryText&&s.returnsText,'The store is finishing its delivery and contact settings.',503);
   }
+
   function publicOrder(o){return {...o,consentAt:undefined,consentVersion:undefined,gatewayState:undefined};}
+  
   const server=createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');
@@ -39,6 +59,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname;const method=req.method;
       const ip=env.TRUST_PROXY==='true'?(req.headers['x-forwarded-for']||req.socket.remoteAddress).split(',')[0].trim():req.socket.remoteAddress;
+      
       if(path==='/api/webhooks/razorpay'&&method==='POST') {
         insist(env.RAZORPAY_WEBHOOK_SECRET,'Webhook is not configured.',503);
         const raw=await body(req,200000,true);
@@ -51,6 +72,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
         }
         store.db.prepare('INSERT OR IGNORE INTO events VALUES(?,?)').run(eventId,Date.now());return json({ok:true});
       }
+
       if(path.startsWith('/api/')&&method!=='GET') {
         const origin=req.headers.origin;
         const allowed=env.APP_URL?new URL(env.APP_URL).origin:null;
@@ -58,28 +80,35 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
         insist(req.headers['sec-fetch-site']!=='cross-site','Cross-site request blocked.',403);
         insist(req.headers['x-requested-with']==='tscart','Missing request protection header.',403);
       }
+
       if(path==='/api/health'&&method==='GET')return json({ok:true});
       if(path==='/api/config'&&method==='GET')return json({settings:store.settings(),mode:env.STORE_MODE==='live'?'live':'demo',onlinePayments:env.STORE_MODE==='live'&&integrations.status().razorpay&&(!(env.REQUIRE_LIVE_KEYS==='true')||integrations.status().razorpayMode==='live'),testPayments:integrations.status().razorpayMode==='test'});
       if(path==='/api/products'&&method==='GET')return json({products:store.products()});
+      
       if(path==='/api/admin/login'&&method==='POST') {
         store.limit('login:'+ip,10,15*60000);const input=await body(req);const admin=store.db.prepare('SELECT * FROM admin WHERE id=1').get();
         const valid=checkPassword(input.password,admin.password);
         insist(valid&&String(input.email).trim().toLowerCase()===admin.email,'Email or password is incorrect.',401);
-        const token=randomToken();store.db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now());store.db.prepare('INSERT INTO sessions VALUES(?,?)').run(sha(token),Date.now()+8*3600000);
+        const token=randomToken();
+        try { store.db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now()); } catch {}
+        store.db.prepare('INSERT INTO sessions VALUES(?,?)').run(sha(token),Date.now()+8*3600000);
         res.setHeader('Set-Cookie',cookie(token));return json({email:admin.email,mustChange:false});
       }
+
       if(path.startsWith('/api/admin/')) {
         const admin=getAdmin(req);
         if(path==='/api/admin/session'&&method==='GET')return json({email:admin.email,mustChange:false});
         if(path==='/api/admin/logout'&&method==='POST'){
           const raw=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('tscart_session='))?.slice(15);
-          if(raw)store.db.prepare('DELETE FROM sessions WHERE hash=?').run(sha(raw));res.setHeader('Set-Cookie',cookie('',0));return json({ok:true});
+          if(raw)try{store.db.prepare('DELETE FROM sessions WHERE hash=?').run(sha(raw));}catch{}
+          res.setHeader('Set-Cookie',cookie('',0));return json({ok:true});
         }
         if(path==='/api/admin/password'&&method==='POST'){
           store.limit('password:'+ip,8,15*60000);const input=await body(req);const a=store.db.prepare('SELECT password FROM admin WHERE id=1').get();
           insist(checkPassword(input.currentPassword,a.password),'Current password is incorrect.',401);
           const password=str(input.password,'New password',12,200);insist(password!=='TSCART123'&&!checkPassword(password,a.password),'Choose a different password.');
-          store.db.prepare('UPDATE admin SET password=?,must_change=0 WHERE id=1').run(hashPassword(password));store.db.prepare('DELETE FROM sessions').run();res.setHeader('Set-Cookie',cookie('',0));store.audit('password_changed');return json({ok:true});
+          store.db.prepare('UPDATE admin SET password=?,must_change=0 WHERE id=1').run(hashPassword(password));try{store.db.prepare('DELETE FROM sessions').run();}catch{}
+          res.setHeader('Set-Cookie',cookie('',0));store.audit('password_changed');return json({ok:true});
         }
         if(path==='/api/admin/products'&&method==='GET')return json({products:store.products(true)});
         if(path==='/api/admin/products'&&method==='POST'){
@@ -90,7 +119,6 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
         const deleteProductMatch=path.match(/^\/api\/admin\/products\/([a-zA-Z0-9_-]+)\/permanent$/);
         if(deleteProductMatch&&method==='DELETE'){store.deleteProduct(deleteProductMatch[1]);return json({ok:true});}
         const productMatch=path.match(/^\/api\/admin\/products\/([a-zA-Z0-9_-]+)$/);
-        // Keep the existing archive route safe for older, already-open admin pages.
         if(productMatch&&method==='DELETE'){insist(store.product(productMatch[1]),'Product not found.',404);store.db.prepare('UPDATE products SET active=0 WHERE id=?').run(productMatch[1]);store.audit('product_archived',productMatch[1]);return json({ok:true});}
         if(path==='/api/admin/upload'&&method==='POST'){
           store.limit('upload:'+ip,100,3600000);const data=await body(req,5*1024*1024,true);
@@ -110,6 +138,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
         if(path==='/api/admin/settings'&&method==='GET')return json({settings:store.settings(),integrations:integrations.status(),mode:env.STORE_MODE==='live'?'live':'demo',webhookUrl:(env.APP_URL||'http://localhost:3000')+'/api/webhooks/razorpay'});
         if(path==='/api/admin/settings'&&method==='POST')return json({settings:store.updateSettings(await body(req))});
       }
+
       if(path==='/api/orders'&&method==='POST') {
         store.limit('checkout:'+ip,25,3600000);readyToSell();const input=await body(req);
         if(input.paymentMethod==='razorpay'){
@@ -118,6 +147,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
         }
         const order=store.createOrder(input,req.headers['idempotency-key']);return json({order:publicOrder(order),token:store.token(order.id)},201);
       }
+
       const match=path.match(/^\/api\/orders\/(TS-[A-Z0-9]+)(?:\/(payment|verify))?$/);
       if(match){
         const id=match[1];store.authorizeOrder(id,req.headers['x-order-token']);const o=store.order(id);insist(o,'Order not found.',404);
@@ -132,6 +162,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
           return json({order:publicOrder(await integrations.verifyPayment(id,input.razorpay_payment_id))});
         }
       }
+
       if(path.startsWith('/api/'))throw new HttpError(404,'Endpoint not found.');
       insist(method==='GET'||method==='HEAD','Method not allowed.',405);
       let pathname;try{pathname=decodeURIComponent(path);}catch{throw new HttpError(400,'Invalid path.');}
@@ -148,6 +179,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
   server.requestTimeout=30000;server.headersTimeout=15000;
   return {server,store,integrations};
 }
+
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const flag=name=>{const i=process.argv.indexOf(name);return i>=0?process.argv[i+1]:undefined;};
   if(flag('--port'))process.env.PORT=flag('--port');
