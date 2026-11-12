@@ -27,9 +27,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
     try{return JSON.parse(data.toString()||'{}');}catch{throw new HttpError(400,'Invalid JSON request.');}
   }
   function readyToSell() {
-    if(env.STORE_MODE!=='live')return;
-    const s=store.settings();
-    insist(s.businessAddress&&s.supportEmail&&s.deliveryText&&s.returnsText,'The store is finishing its delivery and contact settings.',503);
+    return;
   }
   function publicOrder(o){return {...o,consentAt:undefined,consentVersion:undefined,gatewayState:undefined};}
   const server=createServer(async(req,res)=>{
