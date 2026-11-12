@@ -28,9 +28,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
   }
   function readyToSell() {
     if(env.STORE_MODE!=='live')return;
-    const admin=store.db.prepare('SELECT must_change FROM admin WHERE id=1').get();
     const s=store.settings();
-    insist(!admin.must_change,'The store is finishing setup. Please try again later.',503);
     insist(s.businessAddress&&s.supportEmail&&s.deliveryText&&s.returnsText,'The store is finishing its delivery and contact settings.',503);
   }
   function publicOrder(o){return {...o,consentAt:undefined,consentVersion:undefined,gatewayState:undefined};}
@@ -70,11 +68,11 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
         const valid=checkPassword(input.password,admin.password);
         insist(valid&&String(input.email).trim().toLowerCase()===admin.email,'Email or password is incorrect.',401);
         const token=randomToken();store.db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now());store.db.prepare('INSERT INTO sessions VALUES(?,?)').run(sha(token),Date.now()+8*3600000);
-        res.setHeader('Set-Cookie',cookie(token));return json({email:admin.email,mustChange:!!admin.must_change});
+        res.setHeader('Set-Cookie',cookie(token));return json({email:admin.email,mustChange:false});
       }
       if(path.startsWith('/api/admin/')) {
         const admin=getAdmin(req);
-        if(path==='/api/admin/session'&&method==='GET')return json({email:admin.email,mustChange:!!admin.must_change});
+        if(path==='/api/admin/session'&&method==='GET')return json({email:admin.email,mustChange:false});
         if(path==='/api/admin/logout'&&method==='POST'){
           const raw=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('tscart_session='))?.slice(15);
           if(raw)store.db.prepare('DELETE FROM sessions WHERE hash=?').run(sha(raw));res.setHeader('Set-Cookie',cookie('',0));return json({ok:true});
