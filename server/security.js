@@ -30,3 +30,26 @@ export function safeImage(value) {
   insist(/^\/(assets|uploads)\/[a-zA-Z0-9._-]+$/.test(url) || /^https:\/\/[^\s<>"']+$/.test(url), 'Use an uploaded image or an HTTPS image URL.');
   return url;
 }
+
+export function acceptsRequestOrigin(req,env) {
+  const origin=req.headers.origin;
+  if(!origin)return true;
+  const production=env.NODE_ENV==='production';
+  const allowed=new Set();
+  if(env.APP_URL)allowed.add(new URL(env.APP_URL).origin);
+  const addHost=(host,protocol)=>{
+    if(typeof host!=='string'||/[\s,/@?#\\]/.test(host)||!['http','https'].includes(protocol))return;
+    if(production&&protocol!=='https')return;
+    try{allowed.add(new URL(protocol+'://'+host).origin);}catch{}
+  };
+  // Host is the address the browser is currently using, including preview aliases.
+  addHost(req.headers.host,'https');
+  if(!production)addHost(req.headers.host,'http');
+  // Only deployments explicitly configured behind a trusted proxy use its headers.
+  if(env.TRUST_PROXY==='true'){
+    const host=req.headers['x-forwarded-host']?.split(',')[0].trim();
+    const protocol=req.headers['x-forwarded-proto']?.split(',')[0].trim()||(production?'https':'http');
+    addHost(host,protocol);
+  }
+  return allowed.has(origin);
+}

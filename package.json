@@ -1,5 +1,5 @@
 {
-  "name": "tscart", "version": "1.0.6", "private": true, "type": "module",
+  "name": "tscart", "version": "1.0.7", "private": true, "type": "module",
   "description": "TSCART — thoughtfully chosen home essentials",
   "engines": { "node": ">=24 <25" },
   "scripts": { "start": "node --env-file-if-exists=.env server/index.js", "dev": "node --env-file-if-exists=.env server/index.js", "test": "node --test tests/*.test.js", "setup": "node scripts/setup.js", "backup": "node --env-file-if-exists=.env scripts/backup.js" }

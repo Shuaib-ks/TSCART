@@ -1,3 +1,31 @@
+# TSCART v1.0.7 — product controls and rolling announcement
+
+## What was corrected
+
+- The request-origin check could reject same-site admin saves/deletes when the browser used a different HTTPS hostname from APP_URL. It now accepts the current request host. Forwarded host/protocol headers are used only with TRUST_PROXY=true. Foreign origins, cross-site requests and missing request-protection headers remain blocked.
+- New products now have **Published in the storefront** checked by default. Existing archived products remain archived. Saving an unpublished item explicitly says that it was saved as a draft.
+- Delete and Archive now use an in-page confirmation showing the product name. This works without native browser confirmation popups. A failed deletion keeps the product and displays the server error in the dialog; success refreshes the product list. Existing order snapshots are preserved.
+- Saves wait for both gallery-photo and description-media uploads. Product validation/server errors are visible, and entered form details remain available for correction and retry.
+- The announcement bar now scrolls continuously, pauses on hover/focus, and has a pause/resume button. Reduced-motion preferences display a static message. Its text is still controlled in Admin → Settings.
+
+## Install this fix
+
+1. Stop your running server and back up the current project.
+2. Replace the project code with the contents of this ZIP's `tscart` folder. **Keep your current `.env` and entire `data/` folder**; do not overwrite newer orders, products or settings with the archive's older snapshot.
+3. Restart `START-WINDOWS.bat` (or your hosted backend), then press **Ctrl+F5**. Update the server files as well as `public/`; copying only the frontend cannot apply the server fix.
+
+This archive preserves the private configuration and database supplied earlier. It contains no UI-fixture files or test data. Store it privately. The database and upload hosting arrangement has not been changed; this application still needs persistent, writable storage. No live deployment was modified or verified in this update.
+
+## Verification and retained limitations
+
+Three new HTTP regression tests pass: add/delete on the current HTTPS host, foreign-origin/cross-site rejection, and explicitly trusted reverse-proxy handling. The full suite has **48 passes and the same 4 previously documented failures** related to your retained login and checkout-check changes.
+
+Browser checks used an isolated admin UI fixture with simulated data: new product creation with publishing enabled, edit/save, visible save error and successful retry, cancellation without deletion, visible deletion error, successful deletion, and refreshed product lists. Real authentication and database operations were checked through HTTP tests; no credentials were entered into the browser. The real storefront was checked for scrolling, pause/resume behavior, readable announcement text and horizontal overflow.
+
+Your existing admin-cookie bypass and disabled checkout-readiness checks remain unchanged as previously requested. The previous version's features and setup notes follow below.
+
+---
+
 # TSCART v1.0.6 — update to your edited version
 
 ## Changes

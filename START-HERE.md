@@ -2,6 +2,8 @@
 
 A complete, portable store for home essentials. Start here; the detailed guides are in `docs/`.
 
+**v1.0.7 fix:** Product creation publishes by default; same-site admin requests work on alternate site addresses; Delete/Archive use an in-page confirmation with visible errors. The announcement bar scrolls. Update both server and frontend files, keep your current `.env` and `data/`, restart, and press Ctrl+F5. See `UPDATE-NOTES.md`.
+
 **v1.0.6 product update:** Buy Now buttons, free delivery on all new orders, customer reviews with 1–5-star ratings, and image/video/audio attachments in product descriptions. See `UPDATE-NOTES.md` for update instructions and the known limitations preserved from your edited version.
 
 **v1.0.5 admin orders:** All customer addresses, contact details, items, quantities, totals and payment statuses are saved directly in Admin → Orders → View. No messaging setup is needed. To update, stop the server, replace the project files while keeping `data/` and `.env`, restart, and press Ctrl+F5. Existing orders, products and payment settings are preserved.

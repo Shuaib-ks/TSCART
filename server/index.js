@@ -7,7 +7,7 @@ import { Store } from './store.js';
 import { Integrations } from './integrations.js';
 import { resolvePublicFile } from './static-files.js';
 import { uploadedMedia } from './media.js';
-import { randomToken, sha, checkPassword, hashPassword, hmac, equalHex, HttpError, insist, str } from './security.js';
+import { randomToken, sha, checkPassword, hashPassword, hmac, equalHex, HttpError, insist, str, acceptsRequestOrigin } from './security.js';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'data'),fetcher=fetch}={}) {
@@ -73,9 +73,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
       }
 
       if(path.startsWith('/api/')&&method!=='GET') {
-        const origin=req.headers.origin;
-        const allowed=env.APP_URL?new URL(env.APP_URL).origin:null;
-        if(origin)insist(origin===allowed||(!production&&origin===`http://${req.headers.host}`)||(!production&&origin===`https://${req.headers.host}`),'Cross-origin request blocked.',403);
+        insist(acceptsRequestOrigin(req,env),'Cross-origin request blocked. Open the admin panel on the store’s own address.',403);
         insist(req.headers['sec-fetch-site']!=='cross-site','Cross-site request blocked.',403);
         insist(req.headers['x-requested-with']==='tscart','Missing request protection header.',403);
       }
