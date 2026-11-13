@@ -1,5 +1,11 @@
 # Verification report
 
+## Current update: v1.0.6 based on your edited archive
+
+**45 tests pass; 4 pre-existing tests fail.** The ten new feature tests all pass. The same four failures were reproduced on the supplied source before changes and stem from its disabled session/checkout safeguards, preserved as requested. See `../UPDATE-NOTES.md` for current checks, limitations and data-preservation instructions. Unlike the original clean release below, this archive includes your uploaded private configuration and database snapshot, with no data created by our preview testing.
+
+## Historical reports from earlier releases
+
 Verified on 12 November 2026 with Node.js 24.22.1.
 
 ## Automated checks

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { Store } from './store.js';
 import { Integrations } from './integrations.js';
 import { resolvePublicFile } from './static-files.js';
+import { uploadedMedia } from './media.js';
 import { randomToken, sha, checkPassword, hashPassword, hmac, equalHex, HttpError, insist, str } from './security.js';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
@@ -51,7 +52,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
   const server=createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' https://checkout.razorpay.com; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self'; connect-src 'self' https://*.razorpay.com https://*.razorpay.in; frame-src https://*.razorpay.com https://*.razorpay.in; form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' https://checkout.razorpay.com; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src 'self' https:; font-src 'self'; connect-src 'self' https://*.razorpay.com https://*.razorpay.in; frame-src https://*.razorpay.com https://*.razorpay.in; form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
     if(production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
     try {
@@ -82,6 +83,12 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
       if(path==='/api/health'&&method==='GET')return json({ok:true});
       if(path==='/api/config'&&method==='GET')return json({settings:store.settings(),mode:env.STORE_MODE==='live'?'live':'demo',onlinePayments:env.STORE_MODE==='live'&&integrations.status().razorpay&&(!(env.REQUIRE_LIVE_KEYS==='true')||integrations.status().razorpayMode==='live'),testPayments:integrations.status().razorpayMode==='test'});
       if(path==='/api/products'&&method==='GET')return json({products:store.products()});
+      const reviewMatch=path.match(/^\/api\/products\/([a-zA-Z0-9_-]+)\/reviews$/);
+      if(reviewMatch&&method==='GET')return json(store.reviews(reviewMatch[1],Number(url.searchParams.get('offset')||0)));
+      if(reviewMatch&&method==='POST'){
+        store.limit('review:'+ip,5,3600000);
+        return json({review:store.createReview(reviewMatch[1],await body(req,10000),req.headers['idempotency-key'])},201);
+      }
       
       if(path==='/api/admin/login'&&method==='POST') {
         store.limit('login:'+ip,10,15*60000);const input=await body(req);const admin=store.db.prepare('SELECT * FROM admin WHERE id=1').get();
@@ -109,6 +116,10 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
           res.setHeader('Set-Cookie',cookie('',0));store.audit('password_changed');return json({ok:true});
         }
         if(path==='/api/admin/products'&&method==='GET')return json({products:store.products(true)});
+        const adminReviews=path.match(/^\/api\/admin\/products\/([a-zA-Z0-9_-]+)\/reviews$/);
+        if(adminReviews&&method==='GET')return json(store.reviews(adminReviews[1],Number(url.searchParams.get('offset')||0),true));
+        const deleteReview=path.match(/^\/api\/admin\/reviews\/(r-[a-zA-Z0-9-]+)$/);
+        if(deleteReview&&method==='DELETE'){store.deleteReview(deleteReview[1]);return json({ok:true});}
         if(path==='/api/admin/products'&&method==='POST'){
           const input=await body(req);
           if(input.id)insist(store.product(input.id),'Product not found. It may have been deleted. Reload the product list.',404);
@@ -125,6 +136,12 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
           const webp=data.toString('ascii',0,4)==='RIFF'&&data.toString('ascii',8,12)==='WEBP';
           insist(jpeg||png||webp,'Upload a JPEG, PNG or WebP image, up to 5 MB.');
           const filename=randomUUID()+'.'+(jpeg?'jpg':png?'png':'webp');await mkdir(uploadDir,{recursive:true});await writeFile(join(uploadDir,filename),data);return json({url:'/uploads/'+filename},201);
+        }
+        if(path==='/api/admin/description-media'&&method==='POST'){
+          store.limit('upload:'+ip,100,3600000);const data=await body(req,20*1024*1024,true);
+          const {type,extension}=uploadedMedia(data),filename=randomUUID()+'.'+extension;
+          await mkdir(uploadDir,{recursive:true});await writeFile(join(uploadDir,filename),data);
+          return json({url:'/uploads/'+filename,type},201);
         }
         if(path==='/api/admin/orders'&&method==='GET')return json({orders:store.orders()});
         const orderMatch=path.match(/^\/api\/admin\/orders\/(TS-[A-Z0-9]+)(?:\/(reconcile))?$/);
@@ -163,11 +180,23 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
       insist(method==='GET'||method==='HEAD','Method not allowed.',405);
       let pathname;try{pathname=decodeURIComponent(path);}catch{throw new HttpError(400,'Invalid path.');}
       let file;
-      if(pathname.startsWith('/uploads/')){insist(/^\/uploads\/[a-zA-Z0-9-]+\.(jpg|png|webp)$/.test(pathname),'Not found.',404);file=join(uploadDir,pathname.slice(9));}
+      if(pathname.startsWith('/uploads/')){insist(/^\/uploads\/[a-zA-Z0-9-]+\.(jpg|png|webp|gif|mp4|webm|mp3|wav)$/.test(pathname),'Not found.',404);file=join(uploadDir,pathname.slice(9));}
       else {file=resolvePublicFile(join(root,'public'),pathname);}
       let bytes;try{const info=await stat(file);insist(info.isFile(),'Not found.',404);bytes=await readFile(file);}catch{throw new HttpError(404,'File not found.');}
-      const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.jpg':'image/jpeg','.png':'image/png','.webp':'image/webp','.svg':'image/svg+xml','.woff2':'font/woff2','.ttf':'font/ttf','.txt':'text/plain'};
-      res.writeHead(200,{'Content-Type':types[extname(file)]||'application/octet-stream','Cache-Control':['.html','.js','.css'].includes(extname(file))?'no-cache':'public, max-age=3600'});res.end(method==='HEAD'?undefined:bytes);
+      const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.jpg':'image/jpeg','.png':'image/png','.webp':'image/webp','.gif':'image/gif','.mp4':'video/mp4','.webm':'video/webm','.mp3':'audio/mpeg','.wav':'audio/wav','.svg':'image/svg+xml','.woff2':'font/woff2','.ttf':'font/ttf','.txt':'text/plain'};
+      let status=200;
+      if(pathname.startsWith('/uploads/')&&['.mp4','.webm','.mp3','.wav'].includes(extname(file))){
+        res.setHeader('Accept-Ranges','bytes');
+        if(req.headers.range){
+          const range=/^bytes=(\d*)-(\d*)$/.exec(req.headers.range),size=bytes.length;
+          let start=range?.[1]?Number(range[1]):Math.max(0,size-Number(range?.[2]));
+          let end=range?.[1]?(range[2]?Math.min(size-1,Number(range[2])):size-1):size-1;
+          res.setHeader('Content-Range','bytes */'+size);
+          insist(range&&(range[1]||range[2])&&Number.isSafeInteger(start)&&Number.isSafeInteger(end)&&start>=0&&start<size&&end>=start,'Invalid media range.',416);
+          res.setHeader('Content-Range',`bytes ${start}-${end}/${size}`);bytes=bytes.subarray(start,end+1);status=206;
+        }
+      }
+      res.writeHead(status,{'Content-Type':types[extname(file)]||'application/octet-stream','Content-Length':bytes.length,'Cache-Control':['.html','.js','.css'].includes(extname(file))?'no-cache':'public, max-age=3600'});res.end(method==='HEAD'?undefined:bytes);
     } catch(error) {
       if(!res.headersSent){const status=error.status||500;if(status===500)console.error('Server error:',error.name);json({error:status===500?'Something went wrong. Please try again or contact the store.':error.message},status);}else res.end();
     }

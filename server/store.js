@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { hashPassword, randomToken, hmac, equalHex, insist, str, integer, safeImage, sha } from './security.js';
 import { seedProducts, initialSettings } from './seed.js';
+import { descriptionMedia } from './media.js';
 
 export class Store {
   constructor(directory, env = process.env) {
@@ -12,6 +13,8 @@ export class Store {
     this.db = new DatabaseSync(join(directory,'tscart.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS products(id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, data TEXT NOT NULL, stock INTEGER NOT NULL CHECK(stock>=0), active INTEGER NOT NULL DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS reviews(id TEXT PRIMARY KEY,product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,name TEXT NOT NULL,rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),body TEXT NOT NULL,created INTEGER NOT NULL,request_key TEXT UNIQUE NOT NULL,fingerprint TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS reviews_product ON reviews(product_id,created DESC,id DESC);
       CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY, idem TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL, data TEXT NOT NULL, status TEXT NOT NULL, payment_status TEXT NOT NULL, gateway_id TEXT UNIQUE, payment_id TEXT UNIQUE, gateway_state TEXT DEFAULT 'idle', reserved INTEGER DEFAULT 1, created INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS admin(id INTEGER PRIMARY KEY CHECK(id=1), email TEXT NOT NULL, password TEXT NOT NULL, must_change INTEGER DEFAULT 1);
       CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY, expires INTEGER NOT NULL);
@@ -31,9 +34,9 @@ export class Store {
   }
   tx(fn) { this.db.exec('BEGIN IMMEDIATE'); try { const result=fn(); this.db.exec('COMMIT'); return result; } catch(e) {this.db.exec('ROLLBACK'); throw e;} }
   audit(action,entity='') {this.db.prepare('INSERT INTO audit(action,entity,created) VALUES(?,?,?)').run(action,entity,Date.now());}
-  settings() {return JSON.parse(this.db.prepare('SELECT data FROM settings WHERE id=1').get().data);}
-  products(all=false) {return this.db.prepare(`SELECT * FROM products ${all?'':'WHERE active=1'}`).all().map(r=>({...JSON.parse(r.data),stock:r.stock,active:!!r.active}));}
-  product(id) {const r=this.db.prepare('SELECT * FROM products WHERE id=?').get(id);return r?{...JSON.parse(r.data),stock:r.stock,active:!!r.active}:null;}
+  settings() {return {...JSON.parse(this.db.prepare('SELECT data FROM settings WHERE id=1').get().data),shippingFee:0,freeShippingAt:0};}
+  products(all=false) {return this.db.prepare(`SELECT products.*,COUNT(reviews.id) AS review_count,COALESCE(AVG(reviews.rating),0) AS rating_average FROM products LEFT JOIN reviews ON reviews.product_id=products.id ${all?'':'WHERE active=1'} GROUP BY products.id ORDER BY products.rowid`).all().map(r=>({...JSON.parse(r.data),stock:r.stock,active:!!r.active,reviewCount:r.review_count,ratingAverage:r.rating_average}));}
+  product(id) {const r=this.db.prepare('SELECT * FROM products WHERE id=?').get(id);if(!r)return null;const rating=this.db.prepare('SELECT COUNT(*) AS reviewCount,COALESCE(AVG(rating),0) AS ratingAverage FROM reviews WHERE product_id=?').get(id);return {...JSON.parse(r.data),stock:r.stock,active:!!r.active,...rating};}
   saveProduct(input) {
     const id=input.id||'p-'+randomUUID();
     insist(/^[a-zA-Z0-9_-]{1,70}$/.test(id),'Invalid product ID.');
@@ -41,7 +44,7 @@ export class Store {
     if(existing) insist(input.expectedStock===existing.stock,'Stock changed while you were editing. Reload the product and try again.',409);
     const images=(Array.isArray(input.images)?input.images:[input.image]).map(safeImage);
     insist(images.length>0 && images.length<=8,'Add 1–8 product images.');
-    const p={id,name:str(input.name,'Product name',2,90),slug:str(input.slug,'URL slug',2,100),category:str(input.category,'Category',2,40),price:integer(input.price,'Price in paise',100,100000000),description:str(input.description,'Description',10,3000),details:str(input.details||'','Product details',0,3000),material:str(input.material||'','Material',0,100),badge:str(input.badge||'','Label',0,40),images,image:images[0],featured:!!input.featured};
+    const p={id,name:str(input.name,'Product name',2,90),slug:str(input.slug,'URL slug',2,100),category:str(input.category,'Category',2,40),price:integer(input.price,'Price in paise',100,100000000),description:str(input.description,'Description',10,3000),descriptionMedia:descriptionMedia(input.descriptionMedia??existing?.descriptionMedia??[]),details:str(input.details||'','Product details',0,3000),material:str(input.material||'','Material',0,100),badge:str(input.badge||'','Label',0,40),images,image:images[0],featured:!!input.featured};
     insist(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p.slug),'Use lowercase words separated by hyphens for the URL.');
     const stock=integer(input.stock,'Stock',0,1000000);
     const duplicate=this.db.prepare('SELECT id FROM products WHERE slug=? AND id<>?').get(p.slug,id);
@@ -57,11 +60,36 @@ export class Store {
       this.audit('product_deleted',id);
     });
   }
+  reviews(productId,offset=0,all=false) {
+    const product=this.product(productId);insist(product&&(all||product.active),'Product not found.',404);
+    integer(offset,'Review offset',0,1000000);
+    const reviews=this.db.prepare('SELECT id,name,rating,body,created FROM reviews WHERE product_id=? ORDER BY created DESC,id DESC LIMIT 20 OFFSET ?').all(productId,offset);
+    return {reviews,total:product.reviewCount,ratingAverage:product.ratingAverage,nextOffset:offset+reviews.length<product.reviewCount?offset+reviews.length:null};
+  }
+  createReview(productId,input,key) {
+    insist(input&&typeof input==='object'&&!Array.isArray(input),'Enter your review.');
+    insist(typeof key==='string'&&/^[a-zA-Z0-9_-]{20,100}$/.test(key),'A review request ID is required.');
+    const review={name:str(input.name,'Display name',2,60),rating:integer(input.rating,'Rating',1,5),body:str(input.body,'Review',10,2000)};
+    const fingerprint=sha(JSON.stringify({productId,...review}));
+    return this.tx(()=>{
+      const product=this.product(productId);insist(product&&product.active,'Product not found.',404);
+      const previous=this.db.prepare('SELECT * FROM reviews WHERE request_key=?').get(key);
+      if(previous){insist(previous.fingerprint===fingerprint,'This review request was already used.',409);return {id:previous.id,name:previous.name,rating:previous.rating,body:previous.body,created:previous.created};}
+      const result={id:'r-'+randomUUID(),...review,created:Date.now()};
+      this.db.prepare('INSERT INTO reviews VALUES(?,?,?,?,?,?,?,?)').run(result.id,productId,result.name,result.rating,result.body,result.created,key,fingerprint);
+      return result;
+    });
+  }
+  deleteReview(id) {
+    return this.tx(()=>{
+      const result=this.db.prepare('DELETE FROM reviews WHERE id=?').run(id);
+      insist(result.changes===1,'Review not found.',404);this.audit('review_deleted',id);
+    });
+  }
   updateSettings(input) {
     const s={...this.settings()};
     for(const [key,max] of Object.entries({tagline:150,announcement:180,supportEmail:150,supportPhone:25,businessName:120,businessAddress:500,deliveryText:2000,returnsText:3000})) if(input[key]!==undefined) s[key]=str(input[key],key,0,max);
     insist(!s.supportEmail||/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.supportEmail),'Enter a valid support email.');
-    for(const key of ['shippingFee','freeShippingAt']) if(input[key]!==undefined) s[key]=integer(input[key],key,0,10000000);
     this.db.prepare('UPDATE settings SET data=? WHERE id=1').run(JSON.stringify(s));this.audit('settings_saved');return s;
   }
   token(id) {return hmac(this.secret,id);}
@@ -90,7 +118,7 @@ export class Store {
       if(previous){insist(previous.fingerprint===fingerprint,'This checkout request was already used. Start a new checkout.',409);return this.order(previous.id);}
       const items=[];
       for(const [id,quantity] of quantities){const p=this.product(id);insist(p&&p.active,'An item is no longer available.',409);insist(p.stock>=quantity,`Only ${p.stock} of ${p.name} remain.`,409);items.push({id,name:p.name,quantity,price:p.price,image:p.image});}
-      const subtotal=items.reduce((s,p)=>s+p.price*p.quantity,0);const settings=this.settings();const shipping=subtotal>=settings.freeShippingAt?0:settings.shippingFee;
+      const subtotal=items.reduce((s,p)=>s+p.price*p.quantity,0);const shipping=0;
       const order={id:'TS-'+randomUUID().replaceAll('-','').slice(0,12).toUpperCase(),customer,items,subtotal,shipping,total:subtotal+shipping,paymentMethod:input.paymentMethod,created:Date.now(),demo:this.env.STORE_MODE!=='live',consentVersion:'2026-11-12-admin-orders',consentAt:new Date().toISOString(),tracking:''};
       for(const item of items) {const changed=this.db.prepare('UPDATE products SET stock=stock-? WHERE id=? AND stock>=?').run(item.quantity,item.id,item.quantity);insist(changed.changes===1,'Stock changed. Please try again.',409);}
       this.db.prepare('INSERT INTO orders(id,idem,fingerprint,data,status,payment_status,created) VALUES(?,?,?,?,?,?,?)').run(order.id,idem,fingerprint,JSON.stringify(order),input.paymentMethod==='cod'?'confirmed':'awaiting_payment',input.paymentMethod==='cod'?'cod_due':'pending',order.created);

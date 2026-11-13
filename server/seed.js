@@ -1,5 +1,5 @@
 export const initialSettings = {
-  tagline: 'A little ease, in every day.', shippingFee: 7900, freeShippingAt: 99900,
+  tagline: 'A little ease, in every day.', shippingFee: 0, freeShippingAt: 0,
   supportEmail: '', supportPhone: '+91 77366 81091', businessName: 'TSCART', businessAddress: '',
   deliveryText: 'Delivery timing is confirmed after your order is reviewed.',
   returnsText: 'Contact us with your order number for return assistance. Product eligibility and return instructions will be confirmed by our team.',

@@ -16,7 +16,7 @@ npm test
 npm run backup
 ```
 
-No API credentials, sessions, test orders or generated database are distributed in this ZIP. Demo catalogue data lives in `server/seed.js` and is seeded once, on first launch. All sample imagery is illustrative, not evidence of specific product stock.
+This updated ZIP preserves the configuration and database supplied in your edited archive. Treat it as a private store backup. No orders, reviews or uploads created during this update's testing are included. See [UPDATE-NOTES.md](UPDATE-NOTES.md) before replacing an existing installation. Demo catalogue data lives in `server/seed.js` and is seeded only for a new database. All sample imagery is illustrative, not evidence of specific product stock.
 
 ## Guides
 
