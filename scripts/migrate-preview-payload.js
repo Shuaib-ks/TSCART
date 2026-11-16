@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { createClient } from '@libsql/client';
 import { TursoStore, ensureTursoSchema } from '../server/turso-store.js';
+import { initialSettings, seedProducts } from '../server/seed.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const migrationKey = process.env.TSCART_MIGRATION_KEY || '';
@@ -91,18 +92,63 @@ if (!migrationKey) {
       currentCounts[table] = await count(table);
     }
 
-    if (Object.values(currentCounts).every(value => value === 0)) {
-      console.log('Turso is empty. Importing the encrypted catalogue snapshot.');
-      const child = spawnSync(process.execPath, [join(root, 'scripts/migrate-to-vercel.js')], {
-        cwd: root,
-        env: { ...process.env, DATA_DIR: dataDir },
-        stdio: 'inherit'
-      });
-      if (child.error) throw child.error;
-      if (child.status !== 0) throw new Error('TSCART archive migration failed with exit status ' + child.status + '.');
-    } else {
-      console.log('Turso already has records. Verifying whether this exact archive was imported previously.');
+    const isEmpty = Object.values(currentCounts).every(value => value === 0);
+    if (!isEmpty) {
+      // The first isolated preview deployment used the normal app initializer before
+      // the one-time build hook was included. It can only be reset if its state is
+      // provably the untouched six-item seed catalogue: no orders, reviews, sessions,
+      // events, limits, outbox rows, or deletion records; six original product_saved
+      // audit rows; and untouched initial settings/admin state.
+      const expectedSeedIds = seedProducts.map(product => product.id).sort();
+      const currentSeedIds = (await target.execute('SELECT id FROM products')).rows.map(row => String(row.id)).sort();
+      const deletionCount = await count('deleted_products');
+      const sessionCount = await count('sessions');
+      const eventCount = await count('events');
+      const limitCount = await count('limits');
+      const auditRows = (await target.execute('SELECT action,entity FROM audit ORDER BY id')).rows;
+      const settingsRow = await target.execute('SELECT data FROM settings WHERE id=1');
+      const adminRow = await target.execute('SELECT email,must_change FROM admin WHERE id=1');
+      const settingsUntouched = settingsRow.rows.length === 1 &&
+        JSON.stringify(JSON.parse(settingsRow.rows[0].data)) === JSON.stringify(initialSettings);
+      const adminUntouched = adminRow.rows.length === 1 && Number(adminRow.rows[0].must_change) === 1;
+      const auditUntouched = auditRows.length === expectedSeedIds.length &&
+        auditRows.every(row => row.action === 'product_saved' && expectedSeedIds.includes(String(row.entity))) &&
+        new Set(auditRows.map(row => String(row.entity))).size === expectedSeedIds.length;
+      const seedOnly = JSON.stringify(currentSeedIds) === JSON.stringify(expectedSeedIds) &&
+        currentCounts.orders === 0 && currentCounts.reviews === 0 && currentCounts.outbox === 0 &&
+        deletionCount === 0 && sessionCount === 0 && eventCount === 0 && limitCount === 0 &&
+        settingsUntouched && adminUntouched && auditUntouched;
+      assert.ok(seedOnly,
+        'Turso contains records beyond the untouched first-run seed catalogue. Refusing to clear or overwrite any existing store data.');
+
+      console.log('Removing only the verified untouched preview seed catalogue before importing the source archive.');
+      const reset = await target.transaction('write');
+      try {
+        for (const table of ['outbox','orders','reviews','products','deleted_products','events','limits','sessions','audit','admin','settings']) {
+          await reset.execute('DELETE FROM ' + table);
+        }
+        await reset.commit();
+      } catch (error) {
+        try { await reset.rollback(); } catch {}
+        throw error;
+      }
     }
+
+    const afterReset = {};
+    for (const table of ['admin','settings','products','orders','reviews','deleted_products','audit','outbox']) {
+      afterReset[table] = await count(table);
+    }
+    assert.ok(Object.values(afterReset).every(value => value === 0),
+      'Turso is not empty after the safe seed reset. Refusing to import.');
+
+    console.log('Turso is empty. Importing the encrypted catalogue snapshot.');
+    const child = spawnSync(process.execPath, [join(root, 'scripts/migrate-to-vercel.js')], {
+      cwd: root,
+      env: { ...process.env, DATA_DIR: dataDir },
+      stdio: 'inherit'
+    });
+    if (child.error) throw child.error;
+    if (child.status !== 0) throw new Error('TSCART archive migration failed with exit status ' + child.status + '.');
 
     const verifyCatalogue = async () => {
       const actualProductIds = (await target.execute('SELECT id FROM products')).rows.map(row => String(row.id)).sort();
