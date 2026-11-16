@@ -4,3 +4,6 @@ backups/
 node_modules/
 *.log
 .DS_Store
+.env.local
+.vercel
+.vercel-migration.env

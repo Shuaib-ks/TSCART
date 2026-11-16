@@ -1,5 +1,7 @@
 # Hosting TSCART
 
+**Keeping TSCART on Vercel?** Use the separate [Vercel deployment guide](VERCEL-DEPLOYMENT.md). It switches production API data to shared Turso storage and uploaded media to Vercel Blob; do not use the local SQLite path below for Vercel Functions.
+
 The supplied application needs **one always-on Node.js 24 process, HTTPS and persistent disk**. It is a complete server application, not a folder of static HTML to upload to generic static hosting. SQLite, images and sessions are stored in `data/`.
 
 Do not deploy this unchanged to ephemeral serverless hosting such as ordinary Vercel Functions. Multiple replicas or deleted ephemeral disks can lose state. To scale horizontally, migrate SQLite to a shared database and uploads to object storage.

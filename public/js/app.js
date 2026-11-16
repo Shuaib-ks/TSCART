@@ -12,6 +12,15 @@ async function api(path,{method='GET',data,headers={}}={}){
   const r=await fetch(path,{method,credentials:'same-origin',cache:'no-store',headers:{...(method!=='GET'?{'X-Requested-With':'tscart'}:{}),...(data!==undefined?{'Content-Type':'application/json'}:{}),...headers},body:data===undefined?undefined:JSON.stringify(data)});
   let json;try{json=await r.json();}catch{throw new Error('The server returned an unexpected response ('+r.status+'). Restart the server and refresh the page.');}if(!r.ok)throw Object.assign(new Error(json.error||'Request failed ('+r.status+'). Please try again.'),{status:r.status});return json;
 }
+async function uploadAsset(file,kind){
+  if(state.config?.blobUploads){if(typeof window.tscartBlobUpload!=='function')throw new Error('The secure media uploader did not load. Refresh the page and try again.');return window.tscartBlobUpload(file,kind);}
+  const endpoint=kind==='product-image'?'/api/admin/upload':'/api/admin/description-media';
+  const response=await fetch(endpoint,{method:'POST',credentials:'same-origin',headers:{'X-Requested-With':'tscart','Content-Type':file.type||'application/octet-stream'},body:file});
+  let result;try{result=await response.json();}catch{throw new Error('The media server returned an unexpected response.');}
+  if(!response.ok)throw new Error(result.error||'Upload failed.');
+  if(!result.type)result.type=file.type.startsWith('image/')?'image':file.type.startsWith('video/')?'video':'audio';
+  return result;
+}
 function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.remove('show'),3500);}
 const link=(url,text,cls='')=>`<a href="${url}" data-link class="${cls}">${text}</a>`;
 const wordmark=()=>`<span class="wordmark">TSCART<span>HOME</span></span>`;
@@ -138,7 +147,7 @@ document.addEventListener('click',async e=>{
         if(deleting){
           const [publicCatalogue,adminCatalogue]=await Promise.all([api('/api/products'),api('/api/admin/products')]);
           if(publicCatalogue.products.some(p=>p.id===id)||adminCatalogue.products.some(p=>p.id===id)){
-            throw new Error('The delete request succeeded, but this server returned the product again. TSCART needs one shared, persistent DATA_DIR and a single always-on Node instance; separate or temporary SQLite instances can show old products.');
+            throw new Error('The server did not confirm that the product disappeared from the shared catalogue. Refresh the product list and try again; do not recreate the product while this error is showing.');
           }
           state.products=publicCatalogue.products;state.adminProducts=adminCatalogue.products;
         }else{
@@ -153,7 +162,7 @@ document.addEventListener('click',async e=>{
   }catch(error){toast(error.message);b.disabled=false;}
 });
 document.addEventListener('input',e=>{if(e.target.id==='search-input')$('#search-results').innerHTML=searchResults(e.target.value);if(e.target.id==='order-search'){const q=e.target.value.toLowerCase();$('#orders-table').innerHTML=orderTable(state.orders.filter(o=>(o.id+' '+o.customer.name+' '+o.customer.phone).toLowerCase().includes(q)));}if(e.target.name==='name'&&e.target.closest('#product-form')?.dataset.id==='new'){const slug=$('#product-form [name=slug]');if(!slug.dataset.manual)slug.value=e.target.value.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');}if(e.target.name==='slug')e.target.dataset.manual='1';});
-document.addEventListener('change',async e=>{if(e.target.id==='sort'){state.sort=e.target.value;render();}if(e.target.id==='image-upload'){const el=e.target,save=el.closest('form').querySelector('button[type=submit]');el.disabled=true;save.disabled=true;try{const urls=$('#product-form [name=images]');const current=urls.value.split('\n').filter(Boolean);const files=[...el.files];if(current.length+files.length>8)throw new Error('Choose up to 8 images in total.');for(const file of files){if(file.size>5*1024*1024)throw new Error('Each image must be under 5 MB.');const r=await fetch('/api/admin/upload',{method:'POST',headers:{'X-Requested-With':'tscart','Content-Type':file.type},body:file});const json=await r.json();if(!r.ok)throw new Error(json.error);current.push(json.url);urls.value=current.join('\n');$('#image-previews').innerHTML=current.map(x=>image(x,'Product preview')).join('');}toast('Images uploaded. Save the product to publish them.');}catch(err){toast(err.message);}finally{el.disabled=false;el.value='';save.disabled=$('#description-media-upload').disabled;}}});
+document.addEventListener('change',async e=>{if(e.target.id==='sort'){state.sort=e.target.value;render();}if(e.target.id==='image-upload'){const el=e.target,save=el.closest('form').querySelector('button[type=submit]');el.disabled=true;save.disabled=true;try{const urls=$('#product-form [name=images]');const current=urls.value.split('\n').filter(Boolean);const files=[...el.files];if(current.length+files.length>8)throw new Error('Choose up to 8 images in total.');for(const file of files){if(file.size>5*1024*1024)throw new Error('Each image must be under 5 MB.');const uploaded=await uploadAsset(file,'product-image');current.push(uploaded.url);urls.value=current.join('\n');$('#image-previews').innerHTML=current.map(x=>image(x,'Product preview')).join('');}toast('Images uploaded. Save the product to publish them.');}catch(err){toast(err.message);}finally{el.disabled=false;el.value='';save.disabled=$('#description-media-upload').disabled;}}});
 document.addEventListener('invalid',e=>{const form=e.target.closest('#product-form');if(!form)return;const error=$('.form-error',form),label=e.target.closest('.field')?.querySelector('span')?.textContent||'Product field';error.textContent=label+': '+e.target.validationMessage;toast(error.textContent);},true);
 document.addEventListener('submit',async e=>{
   const form=e.target;if(!form.matches('#checkout-form,#login-form,#product-form,#settings-form,#password-form,#order-form,#reconcile-form,#search-form,#review-form'))return;e.preventDefault();const values=Object.fromEntries(new FormData(form));const button=form.querySelector('button[type=submit]')||form.querySelector('button:not([type])');const error=$('.form-error',form);if(error)error.textContent='';if(button)button.disabled=true;
@@ -192,8 +201,7 @@ document.addEventListener('change',async e=>{
     const items=readMediaEditor(list),files=[...el.files];if(items.length+files.length>10)throw new Error('Use up to 10 description media files.');
     for(const file of files){
       const limit=file.type.startsWith('image/')?5:20;if(file.size>limit*1024*1024)throw new Error(`Each ${file.type.startsWith('image/')?'image':'video or audio file'} must be ${limit} MB or smaller.`);
-      const response=await fetch('/api/admin/description-media',{method:'POST',headers:{'X-Requested-With':'tscart','Content-Type':file.type||'application/octet-stream'},body:file});
-      const result=await response.json();if(!response.ok)throw new Error(result.error||'Upload failed.');
+      const result=await uploadAsset(file,'description-media');
       items.push({type:result.type,url:result.url,caption:''});list.innerHTML=mediaEditorRows(items);
     }
     toast('Description media uploaded. Save the product to publish it.');

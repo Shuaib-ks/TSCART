@@ -22,7 +22,8 @@ This updated ZIP preserves the configuration and database supplied in your edite
 
 - [Start here](START-HERE.md)
 - [Razorpay setup](docs/RAZORPAY.md)
-- [Deploy with persistent storage](docs/DEPLOYMENT.md)
+- [Deploy on Vercel with shared storage](docs/VERCEL-DEPLOYMENT.md)
+- [Deploy with a persistent Node host or Docker](docs/DEPLOYMENT.md)
 - [Daily operation and recovery](docs/OPERATIONS.md)
 - [Verification report](docs/VERIFICATION.md)
 - [Asset credits](docs/ASSETS.md)
