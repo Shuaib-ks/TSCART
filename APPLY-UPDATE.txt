@@ -1,0 +1,15 @@
+TSCART 1.0.8 — requested fixes only
+
+Apply
+1. Extract this ZIP into the existing TSCART project root and overwrite matching files.
+2. Keep your existing .env and data/ directory. Do not replace or delete them.
+3. Keep your existing public/assets/*.ttf font files; this update ZIP intentionally does not include font files.
+4. Restart the app using Node.js 24.x on one always-on instance with a persistent DATA_DIR.
+
+The first startup creates the deletion-marker table, migrates existing product_deleted audit entries, removes any matching stale product rows, and checkpoints future permanent deletions. Existing orders and customer data stay in the existing data directory.
+
+Important hosting limitation
+This project stores its catalogue in local SQLite. Separate serverless instances or temporary per-instance disks do not share a database. This code cannot make isolated SQLite files consistent. Use one always-on Node process with persistent storage (as described in docs/DEPLOYMENT.md), or migrate the store to a shared database before running multiple instances.
+
+Validation
+The deletion-specific tests pass. The full test suite has four failures that were also present in the untouched uploaded source: two admin session/logout expectations and two live-checkout gating expectations. Those areas were left unchanged because they are outside this request.

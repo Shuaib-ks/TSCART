@@ -26,3 +26,6 @@ input,textarea,select,button,a{scroll-margin-top:120px;scroll-margin-bottom:40px
 .product-form-error{scroll-margin-top:120px}
 @keyframes announcement-roll{to{transform:translateX(-50%)}}
 @media(prefers-reduced-motion:reduce){.announcement-track{animation:none;transform:none;width:100%;display:block}.announcement-group{min-width:0;padding:0 12px;white-space:normal;justify-content:center;gap:0}.announcement-group:nth-child(2),.announcement-group>span:not(:first-child),.announcement-toggle{display:none}.announcement{height:auto;min-height:34px;padding:7px 0}.announcement-viewport{overflow:visible}}
+
+/* Keep every Buy Now action consistently pill-shaped. */
+.btn[data-action="buy-now"]{border-radius:999px}

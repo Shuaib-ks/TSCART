@@ -13,6 +13,10 @@ export class Store {
     this.db = new DatabaseSync(join(directory,'tscart.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS products(id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, data TEXT NOT NULL, stock INTEGER NOT NULL CHECK(stock>=0), active INTEGER NOT NULL DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS deleted_products(id TEXT PRIMARY KEY, slug TEXT NOT NULL, deleted_at INTEGER NOT NULL);
+      CREATE TRIGGER IF NOT EXISTS prevent_deleted_product_recreation BEFORE INSERT ON products
+        WHEN EXISTS(SELECT 1 FROM deleted_products WHERE id=NEW.id)
+        BEGIN SELECT RAISE(ABORT,'Product was permanently deleted.'); END;
       CREATE TABLE IF NOT EXISTS reviews(id TEXT PRIMARY KEY,product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,name TEXT NOT NULL,rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),body TEXT NOT NULL,created INTEGER NOT NULL,request_key TEXT UNIQUE NOT NULL,fingerprint TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS reviews_product ON reviews(product_id,created DESC,id DESC);
       CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY, idem TEXT UNIQUE NOT NULL, fingerprint TEXT NOT NULL, data TEXT NOT NULL, status TEXT NOT NULL, payment_status TEXT NOT NULL, gateway_id TEXT UNIQUE, payment_id TEXT UNIQUE, gateway_state TEXT DEFAULT 'idle', reserved INTEGER DEFAULT 1, created INTEGER NOT NULL);
@@ -23,12 +27,25 @@ export class Store {
       CREATE TABLE IF NOT EXISTS limits(key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, action TEXT NOT NULL, entity TEXT, created INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS orders_created ON orders(created DESC);`);
+    // Import deletion history from existing versions and remove any stale row that
+    // was restored alongside an older SQLite snapshot. Product IDs are never reused.
+    this.db.exec(`
+      INSERT OR IGNORE INTO deleted_products(id,slug,deleted_at)
+        SELECT entity,'',MAX(created) FROM audit
+        WHERE action='product_deleted' AND entity IS NOT NULL AND entity<>'' GROUP BY entity;
+      DELETE FROM products WHERE id IN (SELECT id FROM deleted_products);
+    `);
     const secretPath = join(directory,'order-secret');
     if(!existsSync(secretPath)) writeFileSync(secretPath,randomToken(),{mode:0o600});
     this.secret=readFileSync(secretPath,'utf8').trim();
     if(!this.db.prepare('SELECT id FROM admin').get()) this.db.prepare('INSERT INTO admin VALUES(1,?,?,1)').run((env.ADMIN_EMAIL||'tscart@gmai.com').toLowerCase(),hashPassword(env.ADMIN_INITIAL_PASSWORD||'TSCART123'));
-    if(!this.db.prepare('SELECT id FROM settings').get()) {
-      this.db.prepare('INSERT INTO settings VALUES(1,?)').run(JSON.stringify(initialSettings));
+    const hasSettings=!!this.db.prepare('SELECT id FROM settings').get();
+    const hasProducts=!!this.db.prepare('SELECT id FROM products LIMIT 1').get();
+    const hasDeletionHistory=!!this.db.prepare('SELECT id FROM deleted_products LIMIT 1').get();
+    if(!hasSettings) this.db.prepare('INSERT INTO settings VALUES(1,?)').run(JSON.stringify(initialSettings));
+    // Seed only a genuinely new store. Missing settings must never cause an existing
+    // catalogue (including a deliberately emptied one) to be repopulated on restart.
+    if(!hasSettings&&!hasProducts&&!hasDeletionHistory) {
       for(const p of seedProducts) this.saveProduct({...p,images:[p.image],active:true});
     }
   }
@@ -38,27 +55,36 @@ export class Store {
   products(all=false) {return this.db.prepare(`SELECT products.*,COUNT(reviews.id) AS review_count,COALESCE(AVG(reviews.rating),0) AS rating_average FROM products LEFT JOIN reviews ON reviews.product_id=products.id ${all?'':'WHERE active=1'} GROUP BY products.id ORDER BY products.rowid`).all().map(r=>({...JSON.parse(r.data),stock:r.stock,active:!!r.active,reviewCount:r.review_count,ratingAverage:r.rating_average}));}
   product(id) {const r=this.db.prepare('SELECT * FROM products WHERE id=?').get(id);if(!r)return null;const rating=this.db.prepare('SELECT COUNT(*) AS reviewCount,COALESCE(AVG(rating),0) AS ratingAverage FROM reviews WHERE product_id=?').get(id);return {...JSON.parse(r.data),stock:r.stock,active:!!r.active,...rating};}
   saveProduct(input) {
-    const id=input.id||'p-'+randomUUID();
-    insist(/^[a-zA-Z0-9_-]{1,70}$/.test(id),'Invalid product ID.');
-    const existing=this.product(id);
-    if(existing) insist(input.expectedStock===existing.stock,'Stock changed while you were editing. Reload the product and try again.',409);
-    const images=(Array.isArray(input.images)?input.images:[input.image]).map(safeImage);
-    insist(images.length>0 && images.length<=8,'Add 1–8 product images.');
-    const p={id,name:str(input.name,'Product name',2,90),slug:str(input.slug,'URL slug',2,100),category:str(input.category,'Category',2,40),price:integer(input.price,'Price in paise',100,100000000),description:str(input.description,'Description',10,3000),descriptionMedia:descriptionMedia(input.descriptionMedia??existing?.descriptionMedia??[]),details:str(input.details||'','Product details',0,3000),material:str(input.material||'','Material',0,100),badge:str(input.badge||'','Label',0,40),images,image:images[0],featured:!!input.featured};
-    insist(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p.slug),'Use lowercase words separated by hyphens for the URL.');
-    const stock=integer(input.stock,'Stock',0,1000000);
-    const duplicate=this.db.prepare('SELECT id FROM products WHERE slug=? AND id<>?').get(p.slug,id);
-    insist(!duplicate,'This URL slug is already in use.');
-    this.db.prepare('INSERT INTO products VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug,data=excluded.data,stock=excluded.stock,active=excluded.active').run(id,p.slug,JSON.stringify(p),stock,input.active===false?0:1);
-    this.audit('product_saved',id);return this.product(id);
+    return this.tx(()=>{
+      const id=input.id||'p-'+randomUUID();
+      insist(/^[a-zA-Z0-9_-]{1,70}$/.test(id),'Invalid product ID.');
+      insist(!this.db.prepare('SELECT id FROM deleted_products WHERE id=?').get(id),'This product was permanently deleted. Create it as a new product instead.',409);
+      const existing=this.product(id);
+      if(existing) insist(input.expectedStock===existing.stock,'Stock changed while you were editing. Reload the product and try again.',409);
+      const images=(Array.isArray(input.images)?input.images:[input.image]).map(safeImage);
+      insist(images.length>0 && images.length<=8,'Add 1–8 product images.');
+      const p={id,name:str(input.name,'Product name',2,90),slug:str(input.slug,'URL slug',2,100),category:str(input.category,'Category',2,40),price:integer(input.price,'Price in paise',100,100000000),description:str(input.description,'Description',10,3000),descriptionMedia:descriptionMedia(input.descriptionMedia??existing?.descriptionMedia??[]),details:str(input.details||'','Product details',0,3000),material:str(input.material||'','Material',0,100),badge:str(input.badge||'','Label',0,40),images,image:images[0],featured:!!input.featured};
+      insist(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p.slug),'Use lowercase words separated by hyphens for the URL.');
+      const stock=integer(input.stock,'Stock',0,1000000);
+      const duplicate=this.db.prepare('SELECT id FROM products WHERE slug=? AND id<>?').get(p.slug,id);
+      insist(!duplicate,'This URL slug is already in use.');
+      this.db.prepare('INSERT INTO products VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug,data=excluded.data,stock=excluded.stock,active=excluded.active').run(id,p.slug,JSON.stringify(p),stock,input.active===false?0:1);
+      this.audit('product_saved',id);return this.product(id);
+    });
   }
   deleteProduct(id) {
-    return this.tx(()=>{
-      const result=this.db.prepare('DELETE FROM products WHERE id=?').run(id);
-      insist(result.changes===1,'Product not found. It may already have been deleted.',404);
+    const result=this.tx(()=>{
+      const product=this.db.prepare('SELECT slug FROM products WHERE id=?').get(id);
+      insist(product,'Product not found. It may already have been deleted.',404);
+      this.db.prepare('DELETE FROM products WHERE id=?').run(id);
+      this.db.prepare('INSERT INTO deleted_products(id,slug,deleted_at) VALUES(?,?,?)').run(id,product.slug,Date.now());
       // Orders contain their own item snapshots. Keep images used by those receipts.
       this.audit('product_deleted',id);
     });
+    // Checkpoint the committed deletion so the main SQLite file reflects it even
+    // when a deployment snapshot does not carry the WAL sidecar with it.
+    try { this.db.exec('PRAGMA wal_checkpoint(FULL)'); } catch {}
+    return result;
   }
   reviews(productId,offset=0,all=false) {
     const product=this.product(productId);insist(product&&(all||product.active),'Product not found.',404);
