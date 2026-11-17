@@ -84,3 +84,43 @@ test('a deliberately empty deleted catalogue is not reseeded on a fresh connecti
   assert.equal((await second.products(true)).length, 0);
   await second.close();
 });
+
+test('a stale independent connection cannot recreate a product after another connection permanently deletes it', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'tscart-turso-stale-'));
+  const database = join(directory, 'shared.sqlite');
+  const env = { ORDER_SECRET: 'c'.repeat(64), STORE_MODE: 'demo' };
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  const writer = openStore(database, env);
+  await writer.initialize();
+  const source = { ...seedProducts[0], id: 'p-turso-stale-delete', slug: 'turso-stale-delete' };
+  await writer.saveProduct({ ...source, images: [source.image], stock: 2, active: true });
+
+  // Keep this second connection open and initialized before the deletion. It must
+  // consult the shared database rather than relying on a stale in-process catalogue.
+  const stale = openStore(database, env);
+  await stale.initialize();
+  assert.equal((await stale.product(source.id)).id, source.id);
+
+  await writer.deleteProduct(source.id);
+
+  await assert.rejects(
+    stale.saveProduct({ ...source, images: [source.image], stock: 2, active: true }),
+    /permanently deleted/
+  );
+  assert.equal(await stale.product(source.id), null);
+  assert.ok(await stale.get('SELECT id FROM deleted_products WHERE id=?', [source.id]));
+
+  await stale.close();
+  await writer.close();
+
+  const restarted = openStore(database, env);
+  await restarted.initialize();
+  assert.equal(await restarted.product(source.id), null);
+  assert.equal((await restarted.products(true)).some(product => product.id === source.id), false);
+  await assert.rejects(
+    restarted.saveProduct({ ...source, images: [source.image], stock: 2, active: true }),
+    /permanently deleted/
+  );
+  await restarted.close();
+});
