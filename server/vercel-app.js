@@ -125,7 +125,17 @@ export async function makeVercelHandler({ env = process.env, fetcher = fetch } =
 
     try {
       const url = new URL(req.url, 'https://vercel.invalid');
-      const path = url.pathname;
+      let path = url.pathname;
+      // Non-Next.js Vercel Functions only match one dynamic path segment.
+      // vercel.json rewrites deeper /api/* requests to /api?__path=... so this
+      // shared handler can dispatch the original route consistently.
+      if (url.pathname === '/api' && url.searchParams.has('__path')) {
+        const routedSegments = String(url.searchParams.get('__path') || '').split('/');
+        insist(routedSegments.length >= 1 && routedSegments.length <= 5 &&
+          routedSegments.every(segment => /^[a-zA-Z0-9_-]+$/.test(segment)),
+          'Invalid API path.', 400);
+        path = '/api/' + routedSegments.join('/');
+      }
       const method = req.method;
       const forwarded = req.headers['x-forwarded-for'];
       const ip = (env.VERCEL === '1' || env.TRUST_PROXY === 'true') && typeof forwarded === 'string'
