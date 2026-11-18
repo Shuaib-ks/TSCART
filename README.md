@@ -1,8 +1,8 @@
 # TSCART
 
-**Start with [START-HERE.md](START-HERE.md)** for the login, one-command launch and integration checklist.
+**Start with [START-HERE.md](START-HERE.md)** for login and one-command launch instructions.
 
-Premium home-essentials storefront and admin with COD, Razorpay and complete order details in the admin panel. Portable Node.js 24 application with no third-party runtime dependencies. Local SQLite and immutable uploaded images require a persistent volume.
+A portable home-essentials storefront and admin with COD, Razorpay and order management. It requires Node.js 24.x and persistent writable storage for its local database and uploads.
 
 ```sh
 npm run setup
@@ -16,7 +16,11 @@ npm test
 npm run backup
 ```
 
-This updated ZIP preserves the configuration and database supplied in your edited archive. Treat it as a private store backup. No orders, reviews or uploads created during this update's testing are included. See [UPDATE-NOTES.md](UPDATE-NOTES.md) before replacing an existing installation. Demo catalogue data lives in `server/seed.js` and is seeded only for a new database. All sample imagery is illustrative, not evidence of specific product stock.
+This clean download does not include your supplied `.env`, database, order secret, customer uploads or backup archive. Keep your existing store and its data unchanged. See [VISUAL-REFRESH.md](VISUAL-REFRESH.md) before using this separate copy. Example catalogue data is illustrative and is seeded only into a new database.
+
+## Visual refresh
+
+The storefront appearance and home-page presentation have been refreshed. The original standalone server, order handling, admin, checkout features, integrations and environment-variable names remain unchanged. See [Visual Refresh](VISUAL-REFRESH.md).
 
 ## Guides
 
@@ -30,6 +34,6 @@ This updated ZIP preserves the configuration and database supplied in your edite
 
 ## Structure
 
-The storefront uses browser ES modules and CSS. The Node HTTP server serves assets and same-origin APIs. `Store` owns transactional SQLite operations. `Integrations` calls Razorpay from the server. Orders are saved directly to SQLite and are available in Admin → Orders. All payment amounts are integer paise and are calculated from the database. Secrets are read only on the server.
+The browser storefront uses ES modules and CSS. The Node HTTP server serves assets and same-origin APIs. `Store` owns transactional SQLite operations. `Integrations` calls Razorpay from the server. Orders are stored in SQLite and available in Admin → Orders. Payment amounts are integer paise and calculated from the database. Secrets are read only on the server.
 
-There is no supplier API, courier booking, customer account system, email delivery service, automatic refund engine or tax-invoice generator. The provided order workflow and fulfilment alerts are ready for a small store to configure and operate.
+There is no supplier API, courier booking, customer account system, email delivery service, automatic refund engine or tax-invoice generator. The order workflow is designed for the store operator to configure and manage manually.

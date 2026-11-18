@@ -115,7 +115,7 @@ export async function makeVercelHandler({ env = process.env, fetcher = fetch } =
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://checkout.razorpay.com; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src 'self' https:; font-src 'self'; connect-src 'self' https://*.razorpay.com https://*.razorpay.in https://*.blob.vercel-storage.com; frame-src https://*.razorpay.com https://*.razorpay.in; form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://checkout.razorpay.com https://connect.facebook.net; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src 'self' https:; font-src 'self'; connect-src 'self' https://*.razorpay.com https://*.razorpay.in https://vercel.com https://*.blob.vercel-storage.com https://www.facebook.com; frame-src https://*.razorpay.com https://*.razorpay.in; form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
     if (production) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     const json = (data, status = 200) => {
       if (res.writableEnded) return;
@@ -125,7 +125,17 @@ export async function makeVercelHandler({ env = process.env, fetcher = fetch } =
 
     try {
       const url = new URL(req.url, 'https://vercel.invalid');
-      const path = url.pathname;
+      let path = url.pathname;
+      // Non-Next.js Vercel Functions only match one dynamic path segment.
+      // vercel.json rewrites deeper /api/* requests to /api?__path=... so this
+      // shared handler can dispatch the original route consistently.
+      if (url.pathname === '/api' && url.searchParams.has('__path')) {
+        const routedSegments = String(url.searchParams.get('__path') || '').split('/');
+        insist(routedSegments.length >= 1 && routedSegments.length <= 5 &&
+          routedSegments.every(segment => /^[a-zA-Z0-9_-]+$/.test(segment)),
+          'Invalid API path.', 400);
+        path = '/api/' + routedSegments.join('/');
+      }
       const method = req.method;
       const forwarded = req.headers['x-forwarded-for'];
       const ip = (env.VERCEL === '1' || env.TRUST_PROXY === 'true') && typeof forwarded === 'string'

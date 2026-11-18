@@ -76,18 +76,23 @@ export class TursoStore {
     `);
     await this.db.execute('DELETE FROM products WHERE id IN (SELECT id FROM deleted_products)');
 
-    const hasAdmin = await this.get('SELECT id FROM admin LIMIT 1');
-    if (!hasAdmin) {
-      await this.run('INSERT INTO admin(id,email,password,must_change) VALUES(1,?,?,1)', [
-        (this.env.ADMIN_EMAIL || 'tscart@gmai.com').toLowerCase(),
-        hashPassword(this.env.ADMIN_INITIAL_PASSWORD || 'TSCART123')
-      ]);
-    }
-    const hasSettings = !!(await this.get('SELECT id FROM settings LIMIT 1'));
+    // Multiple serverless instances can cold-start at the same time. Make the
+    // singleton inserts atomic instead of SELECT-then-INSERT, which races and
+    // causes UNIQUE constraint failures for admin.id and settings.id.
+    await this.run('INSERT OR IGNORE INTO admin(id,email,password,must_change) VALUES(1,?,?,1)', [
+      (this.env.ADMIN_EMAIL || 'tscart@gmai.com').toLowerCase(),
+      hashPassword(this.env.ADMIN_INITIAL_PASSWORD || 'TSCART123')
+    ]);
+
+    // Only the instance that creates the settings row may seed a genuinely new
+    // catalogue. This also prevents concurrent cold starts from seeding twice.
+    const settingsInsert = await this.run(
+      'INSERT OR IGNORE INTO settings(id,data) VALUES(1,?)',
+      [JSON.stringify(initialSettings)]
+    );
     const hasProducts = !!(await this.get('SELECT id FROM products LIMIT 1'));
     const hasDeleted = !!(await this.get('SELECT id FROM deleted_products LIMIT 1'));
-    if (!hasSettings) await this.run('INSERT INTO settings(id,data) VALUES(1,?)', [JSON.stringify(initialSettings)]);
-    if (!hasSettings && !hasProducts && !hasDeleted) {
+    if (settingsInsert.rowsAffected === 1 && !hasProducts && !hasDeleted) {
       for (const product of seedProducts) await this.saveProduct({ ...product, images: [product.image], active: true });
     }
   }

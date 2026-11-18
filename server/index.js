@@ -52,7 +52,7 @@ export function makeApp({env=process.env,dataDir=resolve(root,env.DATA_DIR||'dat
   const server=createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');
     res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' https://checkout.razorpay.com; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src 'self' https:; font-src 'self'; connect-src 'self' https://*.razorpay.com https://*.razorpay.in; frame-src https://*.razorpay.com https://*.razorpay.in; form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' https://checkout.razorpay.com https://connect.facebook.net; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src 'self' https:; font-src 'self'; connect-src 'self' https://*.razorpay.com https://*.razorpay.in https://vercel.com https://*.blob.vercel-storage.com https://www.facebook.com; frame-src https://*.razorpay.com https://*.razorpay.in; form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'");
     if(production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
     try {
